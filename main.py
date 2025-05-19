@@ -124,7 +124,7 @@ def recomendar():
         
         try:
             ## Agregar mensaje del usuario a Redis
-            base_messages.append({"role": "user", "content": query})
+            base_messages.append({"role": "user", "content": prompt})
             redis_client.rpush(redis_key, json.dumps({"role": "user", "content": query}))
             
             respuesta = client.chat.completions.create(
@@ -176,5 +176,15 @@ def borrar_conversacion(key):
         return jsonify({"error": "Clave no encontrada"}), 404
 
 
+@app.route('/chat/<key>', methods=['GET'])
+def obtener_conversacion(key):
+    if redis_client.exists(key):
+        mensajes_raw = redis_client.lrange(key, 0, -1)
+        mensajes = [json.loads(m) for m in mensajes_raw]
+        return jsonify({"mensajes": mensajes}), 200
+    else:
+        return jsonify({"error": "Clave no encontrada"}), 404
+
+
 if __name__ == '__main__':
-    app.run(host="0.0.0.0")
+    app.run(host="0.0.0.0",debug=True)
