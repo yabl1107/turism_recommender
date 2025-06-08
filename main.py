@@ -48,7 +48,7 @@ app = Flask(__name__)
 def recomendar():
     body = request.get_json()
     query = body.get("query")
-    top_k = body.get("top_k", 2)
+    top_k = body.get("top_k", 1)
 
     #user_id = body.get("user_id", "anonimo")
     user_id = g.user['uid']
@@ -187,20 +187,25 @@ def recomendar():
             "respuesta": rpta_txt
         })
     
-@app.route('/chat/<key>', methods=['DELETE'])
-def borrar_conversacion(key):
-    if redis_client.exists(key):
-        redis_client.delete(key)
+@app.route('/chat/<chatId>', methods=['DELETE'])
+@firebase_auth_required
+def borrar_conversacion(chatId):
+    user_id = g.user['uid']
+    key_secure = f"user:{user_id}:chat:{chatId}"
+    if redis_client.exists(key_secure):
+        redis_client.delete(key_secure)
         return jsonify({"message": "Conversación eliminada"}), 200
     else:
         return jsonify({"error": "Clave no encontrada"}), 404
 
 
-@app.route('/chat/<key>', methods=['GET'])
-#@firebase_auth_required
+@app.route('/chat/<key>', methods=['GET']) #Obtiene chat con id de chat
+@firebase_auth_required
 def obtener_conversacion(key):
-    if redis_client.exists(key):
-        mensajes_raw = redis_client.lrange(key, 0, -1)
+    user_id = g.user['uid']
+    key_secure = f"user:{user_id}:chat:{key}"
+    if redis_client.exists(key_secure):
+        mensajes_raw = redis_client.lrange(key_secure, 0, -1)
         mensajes = [json.loads(m) for m in mensajes_raw]
         return jsonify({"mensajes": mensajes}), 200
     else:
