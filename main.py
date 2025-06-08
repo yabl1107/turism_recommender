@@ -8,13 +8,27 @@ from openai import OpenAI
 import os
 import redis
 import json
+import firebase_admin
+from firebase_admin import credentials, auth
+from auth import firebase_auth_required
+from flask import g
+import re
+from datetime import datetime
 
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
 load_dotenv()
 # Obtiene los valores
 redis_host = os.getenv("REDIS_HOST")
 redis_port = int(os.getenv("REDIS_PORT"))
 redis_password = os.getenv("REDIS_PASSWORD")
+cred_json = os.getenv("GOOGLE_CREDENTIALS")
+
+#FIREBASE
+cred_dict = json.loads(cred_json)
+cred = credentials.Certificate(cred_dict)
+firebase_admin.initialize_app(cred)
 
 # Carga la base de datos persistida
 db_turismo = Chroma(persist_directory="./bd2", embedding_function=OpenAIEmbeddings())
@@ -30,21 +44,23 @@ redis_client = redis.Redis(
 
 app = Flask(__name__)
 @app.route('/recomendar', methods=['POST'])
+@firebase_auth_required
 def recomendar():
     body = request.get_json()
     query = body.get("query")
     top_k = body.get("top_k", 2)
 
-    user_id = body.get("user_id", "anonimo")
+    #user_id = body.get("user_id", "anonimo")
+    user_id = g.user['uid']
+
     chat_id = body.get("chat_id", "default")
+    #Si chatId es null, se crea un nuevo chat y 
+    # se retorna id, para setearlo en el arredlo de metadata del viewModel
 
     if not query:
         return jsonify({"error": "Falta el campo 'query'"}), 400
-    if not user_id:
-        return jsonify({"error": "Falta el campo 'user_id'"}), 400
     if not chat_id:
         return jsonify({"error": "Falta el campo 'chat_id'"}), 400
-
 
     #Clave Redis: user:<user_id>:chat:<chat_id>
     redis_key = f"user:{user_id}:chat:{chat_id}"
@@ -61,6 +77,14 @@ def recomendar():
                     "Si el usuario no menciona una ciudad o hace una pregunta ambigua, asume que se refiere a Lima."
             }
         redis_client.rpush(redis_key, json.dumps(msg))
+        # Crear el metadato del chat si es la primera vez
+        meta_key = f"{redis_key}:meta"
+        redis_client.hset(meta_key, mapping={
+            "created_at": datetime.utcnow().isoformat() + "Z",
+            "title": query,
+            "chat_id": chat_id
+        })
+        print("Se ha guardado la clave meta ....")
 
     ## Cargar historial de redis
     context_raw_messages = redis_client.lrange(redis_key, 0, -1)
@@ -97,13 +121,8 @@ def recomendar():
     if intent == "recomendar":
         #######   BUSQUEDA VECTORIAL ########
         recs = db_turismo.similarity_search(query, k=top_k)
-        ids = []
-        for doc in recs:
-            try:
-                id_ = int(doc.page_content.strip('"').split()[0]) 
-                ids.append(id_)
-            except:
-                continue
+        ids = [doc.metadata["id"] for doc in recs]
+        
         # Filtra DataFrame original por los IDs encontrados
         recomendados = data[data["id"].isin(ids)][["id", "title_2","description_2"]]
         lugares_lista = recomendados.to_dict(orient="records")
@@ -137,7 +156,8 @@ def recomendar():
             redis_client.rpush(redis_key, json.dumps({"role": "assistant", "content": recomendacion}))
             
             return jsonify({
-                "recomendacion": recomendacion,
+                "intencion": intent,
+                "respuesta": recomendacion,
                 "lugares": lugares_lista
             })
 
@@ -177,6 +197,7 @@ def borrar_conversacion(key):
 
 
 @app.route('/chat/<key>', methods=['GET'])
+#@firebase_auth_required
 def obtener_conversacion(key):
     if redis_client.exists(key):
         mensajes_raw = redis_client.lrange(key, 0, -1)
@@ -184,6 +205,77 @@ def obtener_conversacion(key):
         return jsonify({"mensajes": mensajes}), 200
     else:
         return jsonify({"error": "Clave no encontrada"}), 404
+
+
+
+@app.route('/conversaciones', methods=['GET'])
+@firebase_auth_required
+def obtener_conversaciones():
+    user_id = g.user['uid']
+    conversaciones = []
+
+    # Buscar todas las claves de metadatos del usuario
+    patron = f"user:{user_id}:chat:*:meta"
+    claves_meta = redis_client.keys(patron)
+
+    for meta_key in claves_meta:
+        metadatos = redis_client.hgetall(meta_key)
+
+        if all(k in metadatos for k in ("created_at", "title", "chat_id")):
+            conversaciones.append({
+                "created_at": metadatos["created_at"],
+                "title": metadatos["title"],
+                "chat_id": metadatos["chat_id"]
+            })
+
+    return jsonify({"conversaciones": conversaciones}), 200
+
+
+@app.route('/mejor_sugerencia', methods=['POST'])
+def mejor_sugerencia():
+    data = request.get_json()
+
+    top_query_results = [str(i) for i in data.get('top_query_results', [])]
+    liked_ids = [str(i) for i in data.get('liked_ids', [])]
+
+    if len(top_query_results)<0 or len(liked_ids)<0:
+        return jsonify({'error': 'Se requieren top_query_results y liked_ids'}), 400
+
+    # Obtener vectores de liked_ids
+    #liked_docs = db_turismo._collection.get(liked_ids)
+    #liked_vectors = liked_docs.get('embeddings', [])
+
+    liked_vectors = db_turismo.get(
+        ids=liked_ids,
+        include=["embeddings"]
+    )["embeddings"]
+
+    # Calcular vector promedio del perfil del usuario
+    profile_vector = np.mean(liked_vectors, axis=0)
+
+    # Obtener vectores de top_query_results
+    #top_docs = db_turismo._collection.get(ids=top_query_results)
+    #top_vectors = top_docs.get('embeddings', [])
+    top_ids = top_query_results
+    
+    top_query_vectors = db_turismo.get(
+        ids=top_query_results,
+        include=["embeddings"]
+    )["embeddings"]
+
+    # Calcular similitudes
+    
+    similarities = cosine_similarity([profile_vector], top_query_vectors)[0]
+
+    # Índice del más parecido
+    best_match_index = np.argmax(similarities)
+    best_match_id = top_query_results[best_match_index]
+    
+    
+    return jsonify({
+        'mejor_id': best_match_id,
+        'similitud': similarities[best_match_index]
+    })
 
 
 if __name__ == '__main__':
