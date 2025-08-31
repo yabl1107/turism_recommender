@@ -193,12 +193,21 @@ def recomendar():
 @firebase_auth_required
 def borrar_conversacion(chatId):
     user_id = g.user['uid']
-    key_secure = f"user:{user_id}:chat:{chatId}"
-    if redis_client.exists(key_secure):
-        redis_client.delete(key_secure)
+
+     # Claves Redis
+    redis_key = f"user:{user_id}:chat:{chatId}"
+    meta_key = f"{redis_key}:meta"
+
+    try:
+        # Eliminar historial y metadata
+        redis_client.delete(redis_key)
+        redis_client.delete(meta_key)
         return jsonify({"message": "Conversación eliminada"}), 200
-    else:
-        return jsonify({"error": "Clave no encontrada"}), 404
+    except Exception as e:
+        return jsonify({
+            "error": "No se pudo eliminar el chat",
+            "detalle": str(e)
+        }), 404
 
 
 @app.route('/chat/<key>', methods=['GET']) #Obtiene chat con id de chat
