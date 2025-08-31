@@ -13,6 +13,7 @@ from firebase_admin import credentials, auth
 from auth import firebase_auth_required
 from flask import g
 import re
+import supabasedb
 from datetime import datetime
 
 from sklearn.metrics.pairwise import cosine_similarity
@@ -31,8 +32,9 @@ cred = credentials.Certificate(cred_dict)
 firebase_admin.initialize_app(cred)
 
 # Carga la base de datos persistida
-db_turismo = Chroma(persist_directory="./bd2", embedding_function=OpenAIEmbeddings())
-data = pd.read_csv("clean_data.csv")
+
+#db_turismo = Chroma(persist_directory="./bd2", embedding_function=OpenAIEmbeddings())
+#data = pd.read_csv("clean_data.csv")
 
 # Conexión a Redis Cloud
 redis_client = redis.Redis(
@@ -96,7 +98,7 @@ def recomendar():
 
     prompt = f"""
     Analiza el siguiente mensaje del usuario y responde con una sola palabra que indique la intención:
-    - "recomendar" si el usuario quiere una recomendación turística,
+    - "recomendar" solo si el usuario quiere una recomendación turística,
     - "charla" si solo está conversando,
     - "otro" si no está claro.
 
@@ -120,16 +122,16 @@ def recomendar():
 
     if intent == "recomendar":
         #######   BUSQUEDA VECTORIAL ########
-        recs = db_turismo.similarity_search(query, k=top_k)
-        ids = [doc.metadata["id"] for doc in recs]
+        recs = supabasedb.get_k_similares(query,top_k)
+        ids = [doc["id"] for doc in recs]
         
         # Filtra DataFrame original por los IDs encontrados
-        recomendados = data[data["id"].isin(ids)][["id", "title_2","description_2"]]
-        lugares_lista = recomendados.to_dict(orient="records")
+        #recomendados = data[data["id"].isin(ids)][["id", "title_2","description_2"]]
+        #lugares_lista = recomendados.to_dict(orient="records")
         
         #######   RESPONDER CON MML USANDO CONTEXTO DE LUGARES RECOMENDADOS  ######
         #prompt para el LLM
-        lista_texto = "\n".join([f"- {lugar['title_2']}: {lugar['description_2']}" for lugar in lugares_lista])
+        lista_texto = "\n".join([f"- {lugar['titulo']}: {lugar['descripcion']}" for lugar in recs])
         
         prompt = f"""
         El usuario está buscando actividades turísticas basados en: "{query}"
@@ -158,7 +160,7 @@ def recomendar():
             return jsonify({
                 "intencion": intent,
                 "respuesta": recomendacion,
-                "lugares": lugares_lista
+                "lugares": recs
             })
 
         except Exception as e:
@@ -236,10 +238,13 @@ def obtener_conversaciones():
     return jsonify({"conversaciones": conversaciones}), 200
 
 
+'''
+
 @app.route('/mejor_sugerencia', methods=['POST'])
 def mejor_sugerencia():
     data = request.get_json()
 
+    
     top_query_results = [str(i) for i in data.get('top_query_results', [])]
     liked_ids = [str(i) for i in data.get('liked_ids', [])]
 
@@ -250,10 +255,9 @@ def mejor_sugerencia():
     #liked_docs = db_turismo._collection.get(liked_ids)
     #liked_vectors = liked_docs.get('embeddings', [])
 
-    liked_vectors = db_turismo.get(
-        ids=liked_ids,
-        include=["embeddings"]
-    )["embeddings"]
+    liked_vectors = supabasedb.getVectors(liked_ids)
+    
+    vectors = [a["embeddings"] for a in liked_vectors]
 
     # Calcular vector promedio del perfil del usuario
     profile_vector = np.mean(liked_vectors, axis=0)
@@ -261,10 +265,10 @@ def mejor_sugerencia():
     # Obtener vectores de top_query_results
     #top_docs = db_turismo._collection.get(ids=top_query_results)
     #top_vectors = top_docs.get('embeddings', [])
-    top_ids = top_query_results
+   
     
-    top_query_vectors = db_turismo.get(
-        ids=top_query_results,
+    top_query_vectors = supabasedb.getById(
+        ids=top_query_results
         include=["embeddings"]
     )["embeddings"]
 
@@ -281,6 +285,7 @@ def mejor_sugerencia():
         'mejor_id': best_match_id,
         'similitud': similarities[best_match_index]
     })
+'''
 
 
 if __name__ == '__main__':
