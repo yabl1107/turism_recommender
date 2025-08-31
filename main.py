@@ -45,6 +45,13 @@ redis_client = redis.Redis(
 )
 
 app = Flask(__name__)
+
+
+@app.route('/check>', methods=['GET'])
+def check_service():
+    return jsonify({"message": "Service is on"}), 200
+
+
 @app.route('/recomendar', methods=['POST'])
 @firebase_auth_required
 def recomendar():
@@ -208,6 +215,7 @@ def borrar_conversacion(chatId):
             "error": "No se pudo eliminar el chat",
             "detalle": str(e)
         }), 404
+
 
 
 @app.route('/chat/<key>', methods=['GET']) #Obtiene chat con id de chat
