@@ -52,6 +52,29 @@ def check_service():
     return jsonify({"message": "Service is on"}), 200
 
 
+@app.route('/feedback', methods=['POST'])
+@firebase_auth_required
+def storeFeedback():
+    body = request.get_json()
+    activities = body.get("activitiesFeedback")
+    uid = g.user['uid']
+            # Intentamos insertar en Supabase
+    try:
+        supabasedb.insert_feedback(activities,uid)
+    except Exception as db_error:
+        # Error al guardar en base de datos
+        return jsonify({
+            "status": "error",
+            "message": "Error al guardar feedback",
+            "details": str(db_error)
+        }), 500
+    # Si todo sale bien
+    return jsonify({
+        "status": "success",
+        "message": "Feedback almacenado correctamente",
+        "count": len(activities) if isinstance(activities, list) else 1
+    }), 201
+
 @app.route('/recomendar', methods=['POST'])
 @firebase_auth_required
 def recomendar():

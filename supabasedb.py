@@ -100,7 +100,35 @@ def get_k_similares(description, k=3):
     except Exception as e:
         print(f"Error: {e}")
         return []
+    
 
+def insert_feedback(feedbackArr, uid):
+    # Connect to the database
+    try:
+        connection = psycopg2.connect(DATABASE_SUPA_URL)
+        print("Connection successful!")
+        
+        # Create a cursor to execute SQL queries
+        cur = connection.cursor()
+
+        for feed in feedbackArr:
+            # Inserta en tabla
+            cur.execute(
+            """
+            INSERT INTO recommendationfeedback (user_id, activity_id,feedback)
+            VALUES (%s, %s, %s)
+            """,
+            (uid, feed['activity_id'], feed['feedback'])
+            )
+            connection.commit()
+
+        # Close the cursor and connection
+        cur.close()
+        connection.close()
+        print("Connection closed.")
+
+    except Exception as e:
+        print(f"Failed to connect: {e}")
 
 def main_load():
     df = pd.read_csv("clean_data.csv")
